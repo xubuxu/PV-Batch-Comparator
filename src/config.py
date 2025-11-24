@@ -114,8 +114,7 @@ THEMES = {
 }
 
 
-    )
-}
+
 
 
 # Naming Patterns
@@ -259,8 +258,7 @@ class ConfigManager:
             scan_direction=user_config.get("scan_direction", "Reverse"),
             remove_duplicates=user_config.get("remove_duplicates", True),
             outlier_removal=user_config.get("outlier_removal", True),
-            remove_duplicates=user_config.get("remove_duplicates", True),
-            outlier_removal=user_config.get("outlier_removal", True),
+
             plot_theme=user_config.get("plot_theme", "Dark"),
             naming_convention=user_config.get("naming_convention", "Traceable"),
             enable_advanced_analysis=user_config.get("enable_advanced_analysis", False),

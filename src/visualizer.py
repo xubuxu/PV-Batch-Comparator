@@ -616,4 +616,54 @@ class IVVisualizer:
         
         Args:
             clean_df: Cleaned dataframe
+            stats_df: Statistics dataframe
+            champion_df: Champion cells dataframe
+            batch_order: Order of batches
+            group_colors: Color mapping
+            hysteresis_df: Optional hysteresis data
+            
+        Returns:
+            Dictionary of generated image paths
+        """
+        if clean_df.empty:
+            return {}
+
+        # Inject state
+        self.clean_df = clean_df
+        self.stats_df = stats_df
+        self.champion_df = champion_df
+        self.batch_order = batch_order
+        self.group_colors = group_colors
+        
+        logger.info("Generating plots...")
+
+        try:
+            # Granular Control: Check selected plots
+            selected = self.config.selected_plots
+            
+            if "box" in selected: self._plot_boxplot()
+            if "hist" in selected: self._plot_histogram()
+            if "trend" in selected: self._plot_trend()
+            if "yield" in selected: self._plot_yield()
+            if "jv_curve" in selected: self._plot_jv_curves()
+            
+            # Correlation plots (Voc-Jsc and Drivers)
+            if "voc_jsc" in selected or "combo_drivers" in selected:
+                self._plot_correlations()
+                
+            if "resistance" in selected: self._plot_resistance_analysis()
+            
+            # Advanced Plots
+            if self.config.enable_advanced_analysis:
+                if "model_fitting" in selected: self._plot_model_fitting()
+                if "hysteresis" in selected: self._plot_hysteresis(hysteresis_df)
+                if "anomalies" in selected: self._plot_anomaly_detection()
+                
+        except Exception as e:
+            logger.error(f"Critical error during visualization: {e}", exc_info=True)
+        finally:
+            plt.close('all')
+            self.clean_df = None
+            self.stats_df = None
+
         return self.img_paths
