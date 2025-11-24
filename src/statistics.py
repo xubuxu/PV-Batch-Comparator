@@ -58,11 +58,15 @@ class IVStatistics:
                 df = df[mask]
 
         # 2. Physical Thresholds (Vectorized boolean mask)
-        mask_phys = (
-                (df['Eff'] > thresh['Eff_Min']) &
-                (df['Voc'] > thresh['Voc_Min']) &
-                (df['Jsc'] > thresh['Jsc_Min'])
-        )
+        # Build mask only for columns that exist
+        mask_phys = df['Eff'] > thresh['Eff_Min']
+        
+        if 'Voc' in df.columns:
+            mask_phys &= df['Voc'] > thresh['Voc_Min']
+        
+        if 'Jsc' in df.columns:
+            mask_phys &= df['Jsc'] > thresh['Jsc_Min']
+        
         if 'FF' in df.columns:
             mask_phys &= (df['FF'] > thresh['FF_Min']) & (df['FF'] < thresh['FF_Max'])
 
