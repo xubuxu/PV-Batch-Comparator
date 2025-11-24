@@ -16,8 +16,10 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from collections import Counter
 
 import pandas as pd
+import numpy as np
 
 from .config import COLUMN_MAPPING, ANALYSIS_PARAMS
+from . import physics
 
 logger = logging.getLogger(__name__)
 
@@ -242,13 +244,14 @@ class IVDataLoader:
             root_dir: Root directory to scan
             
         Returns:
-            Tuple of (raw_df, batch_map_df, user_initials)
+            Tuple of (raw_df, batch_map_df, user_initials, iv_curves)
         """
         root_path = Path(root_dir)
         logger.info(f"Scanning directory: {root_path.resolve()}")
 
         data_list = []
         batch_map_list = []
+        iv_curves = {}  # Dict[CellName, Dict[str, np.ndarray]]
         target_files = []
 
         # 1. Scan files
@@ -286,25 +289,97 @@ class IVDataLoader:
                     continue
 
                 cols_map = self._normalize_columns(df_temp)
-                if 'Eff' not in cols_map:
-                    logger.warning(f"No Eff column found in {file_path.name}, skipping")
+                
+                # Check if it's a Raw IV Curve file (has V and I, but maybe no Eff)
+                is_raw_iv = 'Voltage' in cols_map and 'Current' in cols_map
+                
+                if is_raw_iv and 'Eff' not in cols_map:
+                    # Process as Raw IV Curve
+                    try:
+                        # Rename columns
+                        rename_dict = {v: k for k, v in cols_map.items()}
+                        df_raw = df_temp[list(cols_map.values())].rename(columns=rename_dict)
+                        
+                        # Extract V and I arrays
+                        V = pd.to_numeric(df_raw['Voltage'], errors='coerce').values
+                        I = pd.to_numeric(df_raw['Current'], errors='coerce').values
+                        
+                        # Clean arrays
+                        mask = np.isfinite(V) & np.isfinite(I)
+                        V = V[mask]
+                        I = I[mask]
+                        
+                        if len(V) < 5:
+                            logger.warning(f"Insufficient points in raw file {file_path.name}")
+                            continue
+                            
+                        # Calculate parameters using physics module
+                        # We use a simplified extraction here just to populate the DataFrame
+                        # The full advanced analysis will happen in analyzer.py
+                        params = physics.extract_pv_parameters(V, I)
+                        
+                        # Create a single-row DataFrame
+                        cell_name = file_path.stem
+                        row_data = {
+                            'CellName': cell_name,
+                            'Eff': params.get('Eff', 0.0), # Physics module needs to return Eff!
+                            # Wait, extract_pv_parameters returns Rs, Rsh, etc.
+                            # We need basic params (Eff, Voc, Jsc, FF) first.
+                            # Let's calculate them simply here or update physics module.
+                            # For now, simple calculation:
+                        }
+                        
+                        # Simple parameter extraction
+                        Voc = np.max(V) if np.max(V) > 0 else 0
+                        Jsc = np.max(np.abs(I))
+                        Pmax = np.max(V * I) if np.max(V * I) > 0 else 0
+                        # Check if I is current density or absolute current?
+                        # Assuming mA/cm² as per standard, or user needs to ensure it.
+                        
+                        # Calculate FF and Eff
+                        if Voc * Jsc > 0:
+                            FF = (Pmax / (Voc * Jsc)) * 100
+                            Eff = Pmax / 100 * 100 # Assuming 100mW/cm2 input power -> Eff = Pmax(mW/cm2)
+                            # Note: This assumes input is J (mA/cm2). If I (A), this is wrong.
+                            # But we can't know area. Assume J.
+                        else:
+                            FF = 0
+                            Eff = 0
+                            
+                        row_data.update({
+                            'Voc': Voc, 'Jsc': Jsc, 'FF': FF, 'Eff': Eff,
+                            'Rs': params.get('Rs_slope', np.nan),
+                            'Rsh': params.get('Rsh_slope', np.nan)
+                        })
+                        
+                        df_subset = pd.DataFrame([row_data])
+                        
+                        # Store curve data
+                        iv_curves[cell_name] = {'V': V, 'I': I}
+                        
+                    except Exception as e:
+                        logger.warning(f"Failed to process raw IV file {file_path.name}: {e}")
+                        continue
+                        
+                elif 'Eff' in cols_map:
+                    # Process as Summary File (Existing logic)
+                    rename_dict = {v: k for k, v in cols_map.items()}
+                    keep_cols = list(cols_map.values())
+                    if 'CellName' in cols_map:
+                        keep_cols.append(cols_map['CellName'])
+
+                    df_subset = df_temp[keep_cols].rename(columns=rename_dict)
+                    df_subset = df_subset.loc[:, ~df_subset.columns.duplicated()]
+
+                    # Coerce numeric types
+                    for col in ANALYSIS_PARAMS:
+                        if col in df_subset.columns:
+                            df_subset[col] = pd.to_numeric(df_subset[col], errors='coerce')
+
+                    df_subset.dropna(subset=['Eff'], inplace=True)
+                else:
+                    logger.warning(f"No Eff column and not a valid raw IV file: {file_path.name}, skipping")
                     continue
-
-                # Rename and subset
-                rename_dict = {v: k for k, v in cols_map.items()}
-                keep_cols = list(cols_map.values())
-                if 'CellName' in cols_map:
-                    keep_cols.append(cols_map['CellName'])
-
-                df_subset = df_temp[keep_cols].rename(columns=rename_dict)
-                df_subset = df_subset.loc[:, ~df_subset.columns.duplicated()]
-
-                # Coerce numeric types
-                for col in ANALYSIS_PARAMS:
-                    if col in df_subset.columns:
-                        df_subset[col] = pd.to_numeric(df_subset[col], errors='coerce')
-
-                df_subset.dropna(subset=['Eff'], inplace=True)
 
                 # Generate Batch Label
                 short_label = self._parse_batch_label(dirpath.name)
@@ -316,6 +391,9 @@ class IVDataLoader:
 
                 df_subset['Batch'] = short_label
                 df_subset['SortKey'] = str(dirpath)
+                
+                # If we processed a summary file, we don't have IV curves for these cells
+                # unless we want to look for them separately. For now, only raw files provide curves.
 
                 data_list.append(df_subset)
                 batch_map_list.append({'Batch': short_label, 'Folder': dirpath.name})
@@ -325,10 +403,10 @@ class IVDataLoader:
                 logger.warning(f"Error reading {file_path}: {e}")
 
         if not data_list:
-            return pd.DataFrame(), pd.DataFrame(), self.config.default_initials
+            return pd.DataFrame(), pd.DataFrame(), self.config.default_initials, {}
 
         raw_df = pd.concat(data_list, ignore_index=True)
         batch_map_df = pd.DataFrame(batch_map_list)
         user_initials = self._detect_user_initials(raw_df)
 
-        return raw_df, batch_map_df, user_initials
+        return raw_df, batch_map_df, user_initials, iv_curves

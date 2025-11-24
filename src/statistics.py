@@ -2,14 +2,15 @@
 IV Batch Analyzer V5.0 - Professional Edition  
 Statistics Module
 
-Handles data cleaning, statistical analysis, and yield calculation.
+Handles data cleaning, statistical analysis, yield calculation, and hysteresis analysis.
 """
 from __future__ import annotations
 
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 import pandas as pd
+import numpy as np
 from scipy import stats
 
 from .config import ANALYSIS_PARAMS, EFF_BINS, EFF_BIN_LABELS
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 # ================= STATISTICS ENGINE =================
 
 class IVStatistics:
-    """Handles data cleaning, statistical analysis, and yield calculation."""
+    """Handles data cleaning, statistical analysis, yield calculation, and hysteresis analysis."""
 
     def __init__(self, config):
         """
@@ -178,7 +179,10 @@ class IVStatistics:
         stats_df = pd.DataFrame(stats_list)
 
         # Champion Selection (Vectorized)
-        champion_df = clean_df.sort_values('Eff', ascending=False).groupby('Batch', as_index=False).first()
+        criteria = getattr(self.config, 'champion_criteria', 'Max Eff')
+        sort_col = 'FF' if criteria == 'Max FF' else 'Eff'
+        
+        champion_df = clean_df.sort_values(sort_col, ascending=False).groupby('Batch', as_index=False).first()
         champion_df = champion_df.set_index('Batch').reindex(batch_order).reset_index()
 
         # Top 10 Cells
@@ -189,3 +193,113 @@ class IVStatistics:
         yield_df = yield_raw.reindex(batch_order).fillna(0).reset_index()
 
         return stats_df, champion_df, top_cells_df, yield_df, comparisons
+
+    def calculate_hysteresis_metrics(self, raw_df: pd.DataFrame) -> Optional[pd.DataFrame]:
+        """
+        Calculate hysteresis metrics for cells with both forward and reverse scans.
+        
+        Important for perovskite solar cells analysis.
+        
+        Hysteresis Index (HI):
+            HI = (PCE_reverse - PCE_forward) / PCE_reverse × 100%
+        
+        Categories:
+            - Negligible: HI < 5%
+            - Moderate: 5% <= HI < 15%
+            - Significant: HI >= 15%
+        
+        Args:
+            raw_df: Raw dataframe before filtering (must contain ScanDir column)
+            
+        Returns:
+            DataFrame with hysteresis metrics or None if data unavailable
+        """
+        if 'ScanDir' not in raw_df.columns or 'CellName' not in raw_df.columns or raw_df.empty:
+            logger.info("Hysteresis analysis skipped: Missing scan direction or cell name data")
+            return None
+        
+        logger.info("Calculating hysteresis metrics...")
+        
+        # Separate forward and reverse scans
+        df = raw_df.copy()
+        df['ScanDir'] = df['ScanDir'].astype(str).str.strip().str.upper()
+        
+        forward_mask = df['ScanDir'].str.contains('F', case=False, na=False)
+        reverse_mask = df['ScanDir'].str.contains('R', case=False, na=False)
+        
+        df_forward = df[forward_mask].copy()
+        df_reverse = df[reverse_mask].copy()
+        
+        if df_forward.empty or df_reverse.empty:
+            logger.warning("Hysteresis analysis skipped: Missing forward or reverse scans")
+            return None
+        
+        # Find cells with both scans
+        cells_forward = set(df_forward['CellName'].unique())
+        cells_reverse = set(df_reverse['CellName'].unique())
+        cells_both = cells_forward & cells_reverse
+        
+        if not cells_both:
+            logger.warning("Hysteresis analysis skipped: No cells with both scan directions")
+            return None
+        
+        logger.info(f"Found {len(cells_both)} cells with both forward and reverse scans")
+        
+        # Build hysteresis dataframe
+        hysteresis_records = []
+        
+        for cell in cells_both:
+            try:
+                # Get forward and reverse data (keep best if duplicates)
+                fwd = df_forward[df_forward['CellName'] == cell].sort_values('Eff', ascending=False).iloc[0]
+                rev = df_reverse[df_reverse['CellName'] == cell].sort_values('Eff', ascending=False).iloc[0]
+                
+                # Calculate metrics
+                params = ['Eff', 'Voc', 'Jsc', 'FF']
+                record = {
+                    'CellName': cell,
+                    'Batch': fwd.get('Batch', 'Unknown')
+                }
+                
+                for param in params:
+                    if param in fwd and param in rev:
+                        val_fwd = fwd[param]
+                        val_rev = rev[param]
+                        record[f'{param}_Forward'] = val_fwd
+                        record[f'{param}_Reverse'] = val_rev
+                        
+                        # Hysteresis Index
+                        if val_rev != 0:
+                            hi = ((val_rev - val_fwd) / val_rev) * 100
+                            record[f'HI_{param}'] = hi
+                        else:
+                            record[f'HI_{param}'] = np.nan
+                
+                # Overall hysteresis category based on Eff
+                hi_eff = record.get('HI_Eff', np.nan)
+                if pd.isna(hi_eff):
+                    category = 'Unknown'
+                elif abs(hi_eff) < 5:
+                    category = 'Negligible'
+                elif abs(hi_eff) < 15:
+                    category = 'Moderate'
+                else:
+                    category = 'Significant'
+                
+                record['Category'] = category
+                record['Eff_Average'] = (record['Eff_Forward'] + record['Eff_Reverse']) / 2
+                
+                hysteresis_records.append(record)
+                
+            except Exception as e:
+                logger.debug(f"Hysteresis calculation failed for cell {cell}: {e}")
+                continue
+        
+        if not hysteresis_records:
+            logger.warning("No hysteresis metrics could be calculated")
+            return None
+        
+        hysteresis_df = pd.DataFrame(hysteresis_records)
+        logger.info(f"✓ Hysteresis analysis complete: {len(hysteresis_df)} cells analyzed")
+        
+        return hysteresis_df

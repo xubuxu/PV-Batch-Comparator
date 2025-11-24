@@ -59,7 +59,7 @@ class IVReportGenerator:
 
     def create_output_dir(self, root_dir: Path, raw_df: pd.DataFrame, user_initials: str) -> Path:
         """
-        Creates output directory with timestamp and run info.
+        Creates output directory with configurable naming convention.
         
         Args:
             root_dir: Root directory for analysis
@@ -69,107 +69,60 @@ class IVReportGenerator:
         Returns:
             Path to created output directory
         """
+        from .config import NAMING_PATTERNS
+        
+        # 1. Prepare context variables
+        now = datetime.now()
         run_nums = []
+        batch_names = []
+        
         if not raw_df.empty and 'Batch' in raw_df.columns:
-            for batch in raw_df['Batch'].unique():
+            batch_names = sorted(raw_df['Batch'].unique().astype(str))
+            for batch in batch_names:
                 match = re.search(r'\d+', str(batch))
                 if match:
                     run_nums.append(int(match.group(0)))
-
-        suffix = datetime.now().strftime("%Y%m%d_%H%M")
+        
+        # Determine RunID
         if run_nums:
             min_r, max_r = min(run_nums), max(run_nums)
-            suffix = f"RUN{min_r}" if min_r == max_r else f"RUN{min_r}-{max_r}"
-
-        folder_name = f"IV_Report_{user_initials}_{suffix}"
-        self.output_dir = root_dir / folder_name
-        self.output_dir.mkdir(exist_ok=True)
-        logger.info(f"✓ Output directory created: {self.output_dir.name}")
-        return self.output_dir
-
-    def export_reports(self, clean_df: pd.DataFrame, stats_df: pd.DataFrame,
-                       champion_df: pd.DataFrame, top_cells_df: pd.DataFrame,
-                       yield_df: pd.DataFrame, batch_map_df: pd.DataFrame,
-                       comparisons: Dict[str, Any], img_paths: Dict[str, Path],
-                       user_initials: str, data_folder_name: str = "") -> None:
-        """
-        Generate all reports (Excel, Word, PowerPoint).
-        
-        Args:
-            clean_df: Cleaned data
-            stats_df: Statistics
-            champion_df: Champion cells
-            top_cells_df: Top 10 cells
-            yield_df: Yield distribution
-            batch_map_df: Batch mapping
-            comparisons: Statistical comparisons
-            img_paths: Dictionary of plot paths
-            user_initials: User initials
-            data_folder_name: Name of the data folder for PPT title
-        """
-        if not self.output_dir:
-            raise ReportGenerationError("Output directory not created")
-            
-        logger.info("Exporting reports...")
-
-        try:
-            # --- 1. Excel Export ---
-            self._export_excel(clean_df, stats_df, champion_df, top_cells_df, yield_df)
-            
-            # --- 2. Word Export ---
-            self._export_word(stats_df, champion_df, top_cells_df, yield_df, 
-                            batch_map_df, comparisons, img_paths, user_initials)
-            
-            # --- 3. PPT Export ---
-            if HAS_PPTX:
-                self._export_powerpoint(stats_df, champion_df, top_cells_df, yield_df,
-                                      batch_map_df, comparisons, img_paths, user_initials, data_folder_name)
-            
-            logger.info(f"✓ Reports saved to: {self.output_dir}")
-            
-        except Exception as e:
-            raise ReportGenerationError(f"Report generation failed: {e}") from e
-
-    def _export_excel(self, clean_df: pd.DataFrame, stats_df: pd.DataFrame,
-                     champion_df: pd.DataFrame, top_cells_df: pd.DataFrame,
-                     yield_df: pd.DataFrame) -> None:
-        """Export data to Excel file."""
-        path = self.output_dir / self.config.excel_data_name
-        with pd.ExcelWriter(path, engine='openpyxl') as writer:
-            clean_df.to_excel(writer, sheet_name='Cleaned_Data', index=False)
-            stats_df.to_excel(writer, sheet_name='Statistics', index=False)
-            if not champion_df.empty:
-                champion_df.to_excel(writer, sheet_name='Champions', index=False)
-            top_cells_df.to_excel(writer, sheet_name='Top_10_Cells', index=False)
-            yield_df.to_excel(writer, sheet_name='Yield_Table', index=False)
-
-            for sheet in writer.sheets.values():
-                for col in sheet.columns:
-                    sheet.column_dimensions[col[0].column_letter].width = 15
-
-    def _export_word(self, stats_df: pd.DataFrame, champion_df: pd.DataFrame,
-                    top_cells_df: pd.DataFrame, yield_df: pd.DataFrame,
-                    batch_map_df: pd.DataFrame, comparisons: Dict[str, Any],
-                    img_paths: Dict[str, Path], user_initials: str) -> None:
-        """Export report to Word document."""
-        doc = Document()
-        doc.add_heading(f'IV Analysis Report ({user_initials})', 0)
-        doc.add_heading('1. Executive Summary', level=1)
-
-        if comparisons.get('Results'):
-            ctrl = comparisons['Control']
-            for batch, res in comparisons['Results'].items():
-                p = doc.add_paragraph()
-                run = p.add_run(f"▶ {batch} vs {ctrl}: ")
-                run.bold = True
-                run.font.color.rgb = RGBColor(0, 51, 102)
-                if 'Eff' in res:
-                    e = res['Eff']
-                    p.add_run(f"Eff {e['dir']} by {abs(e['diff']):.2f}% (p={e['p']:.3f}, {e['sig']}).")
+            run_id = f"RUN{min_r}" if min_r == max_r else f"RUN{min_r}-{max_r}"
         else:
-            doc.add_paragraph("Single batch analysis.")
-
-        doc.add_heading('2. Data Tables', level=1)
+            run_id = "RUN001"
+            
+        # Determine Batch Summary
+        if len(batch_names) == 1:
+            batch_summary = batch_names[0]
+        elif len(batch_names) > 1:
+            batch_summary = f"{batch_names[0]}_etal"
+        else:
+            batch_summary = "BatchData"
+            
+        context = {
+            "User": user_initials,
+            "Timestamp": now.strftime("%Y%m%d_%H%M"),
+            "Timestamp_Short": now.strftime("%H%M%S"),
+            "YYYYMMDD": now.strftime("%Y%m%d"),
+            "HHMM": now.strftime("%H%M"),
+            "Batch_Summary": batch_summary,
+            "RunID": run_id
+        }
+        
+        # 2. Get pattern
+        convention = getattr(self.config, 'naming_convention', 'Traceable')
+        pattern = NAMING_PATTERNS.get(convention, NAMING_PATTERNS['Traceable'])
+        
+        # 3. Format folder name
+        try:
+            folder_name = pattern.format(**context)
+        except KeyError as e:
+            logger.warning(f"Invalid naming pattern key: {e}. Falling back to default.")
+            folder_name = f"IV_Report_{user_initials}_{context['Timestamp']}"
+            
+        # Sanitize (remove illegal chars for Windows/Linux)
+        folder_name = re.sub(r'[<>:"/\\|?*]', '_', folder_name)
+        
+        self.output_dir = root_dir / folder_name
         self._add_word_table(doc, batch_map_df, ['Batch', 'Folder'], "2.1 Batch & Folder Reference")
 
         cols = ['Batch', 'Count', 'Eff_Mean', 'Eff_Max', 'Voc_Mean', 'FF_Mean']
@@ -184,6 +137,27 @@ class IVReportGenerator:
         valid_yield_cols = ['Batch'] + [c for c in yield_cols if yield_df[c].sum() > 0]
         self._add_word_table(doc, yield_df, valid_yield_cols, "2.5 Efficiency Yield Distribution (%)")
 
+        # --- Advanced Analysis Tables ---
+        if self.config.enable_advanced_analysis:
+            # 1. Physics Parameters
+            if 'Rs_fitted' in clean_df.columns:
+                phy_cols = ['Batch', 'Rs_fitted', 'Rsh_fitted', 'n', 'I0', 'IL', 'fit_R2']
+                # Calculate means per batch
+                phy_means = clean_df.groupby('Batch')[['Rs_fitted', 'Rsh_fitted', 'n', 'I0', 'IL', 'fit_R2']].mean().reset_index()
+                self._add_word_table(doc, phy_means, phy_cols, "2.6 Physics Model Parameters (Mean)")
+
+            # 2. Hysteresis
+            if hysteresis_df is not None and not hysteresis_df.empty and 'HI_Eff' in hysteresis_df.columns:
+                hys_cols = ['Batch', 'HI_Eff', 'HI_Voc', 'HI_Jsc', 'HI_FF']
+                hys_means = hysteresis_df.groupby('Batch')[['HI_Eff', 'HI_Voc', 'HI_Jsc', 'HI_FF']].mean().reset_index()
+                self._add_word_table(doc, hys_means, hys_cols, "2.7 Hysteresis Indices (Mean %)")
+
+            # 3. Anomalies
+            if 'has_s_shape' in clean_df.columns:
+                # Count True values
+                anom_counts = clean_df.groupby('Batch')[['has_s_shape', 'has_kink']].sum().reset_index()
+                self._add_word_table(doc, anom_counts, ['Batch', 'has_s_shape', 'has_kink'], "2.8 Anomaly Detection Summary (Count)")
+
         doc.add_heading('3. Visual Analysis', level=1)
         plot_order = [
             ('jv_curve', 'J-V Curves of Champion Cells'),
@@ -193,7 +167,10 @@ class IVReportGenerator:
             ('trend', 'Batch Trend Analysis (Max/Mean/Median)'),
             ('yield', 'Efficiency Yield Stack'),
             ('combo_drivers', 'Key Efficiency Drivers (Correlations)'),
-            ('resistance', 'Parasitic Resistance Analysis (Rs & Rsh)')
+            ('resistance', 'Parasitic Resistance Analysis (Rs & Rsh)'),
+            ('model_fitting', 'Physics Model Fitting & Extraction'),
+            ('hysteresis', 'Hysteresis Analysis'),
+            ('anomalies', 'Anomaly Detection (S-Shapes)')
         ]
         for key, title in plot_order:
             if key in img_paths and img_paths[key]:
@@ -201,6 +178,19 @@ class IVReportGenerator:
                 doc.add_picture(str(img_paths[key]), width=Inches(6.5))
         
         doc.save(self.output_dir / self.config.report_docx_name)
+
+        # --- Generate PowerPoint Report ---
+        if HAS_PPTX:
+            try:
+                self._export_powerpoint(
+                    stats_df, champion_df, top_cells_df, yield_df,
+                    batch_map_df, comparisons, img_paths, user_initials, 
+                    data_folder_name=data_folder_name
+                )
+            except Exception as e:
+                logger.error(f"Failed to generate PowerPoint: {e}")
+        else:
+            logger.warning("python-pptx not installed, skipping slides.")
 
     def _export_powerpoint(self, stats_df: pd.DataFrame, champion_df: pd.DataFrame,
                           top_cells_df: pd.DataFrame, yield_df: pd.DataFrame,
@@ -251,6 +241,20 @@ class IVReportGenerator:
         self._add_pptx_table(prs, top_cells_df, champ_cols, "Top 10 Highest Efficiency Cells")
         self._add_pptx_table(prs, yield_df, valid_yield_cols, "Efficiency Yield Distribution (%)")
 
+        # --- Advanced Analysis Tables (PPT) ---
+        if self.config.enable_advanced_analysis:
+            if 'Rs_fitted' in clean_df.columns:
+                phy_means = clean_df.groupby('Batch')[['Rs_fitted', 'Rsh_fitted', 'n', 'I0', 'IL', 'fit_R2']].mean().reset_index()
+                self._add_pptx_table(prs, phy_means, ['Batch', 'Rs_fitted', 'Rsh_fitted', 'n', 'I0', 'IL'], "Physics Model Parameters (Mean)")
+
+            if hysteresis_df is not None and not hysteresis_df.empty and 'HI_Eff' in hysteresis_df.columns:
+                hys_means = hysteresis_df.groupby('Batch')[['HI_Eff', 'HI_Voc', 'HI_Jsc', 'HI_FF']].mean().reset_index()
+                self._add_pptx_table(prs, hys_means, ['Batch', 'HI_Eff', 'HI_Voc', 'HI_Jsc', 'HI_FF'], "Hysteresis Indices (Mean %)")
+            
+            if 'has_s_shape' in clean_df.columns:
+                anom_counts = clean_df.groupby('Batch')[['has_s_shape', 'has_kink']].sum().reset_index()
+                self._add_pptx_table(prs, anom_counts, ['Batch', 'has_s_shape', 'has_kink'], "Anomaly Detection Summary (Count)")
+
         plot_order = [
             ('jv_curve', 'J-V Curves of Champion Cells'),
             ('voc_jsc', 'Voc vs. Jsc Correlation Analysis'),
@@ -259,7 +263,10 @@ class IVReportGenerator:
             ('trend', 'Batch Trend Analysis (Max/Mean/Median)'),
             ('yield', 'Efficiency Yield Stack'),
             ('combo_drivers', 'Key Efficiency Drivers (Correlations)'),
-            ('resistance', 'Parasitic Resistance Analysis (Rs & Rsh)')
+            ('resistance', 'Parasitic Resistance Analysis (Rs & Rsh)'),
+            ('model_fitting', 'Physics Model Fitting & Extraction'),
+            ('hysteresis', 'Hysteresis Analysis'),
+            ('anomalies', 'Anomaly Detection (S-Shapes)')
         ]
         
         for key, title in plot_order:

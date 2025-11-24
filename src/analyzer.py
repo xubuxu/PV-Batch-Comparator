@@ -15,6 +15,7 @@ from .data_loader import IVDataLoader
 from .statistics import IVStatistics
 from .visualizer import IVVisualizer
 from .reporter import IVReportGenerator
+from . import physics
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class IVBatchAnalyzer:
         self.stats = IVStatistics(self.config)
         self.reporter = IVReportGenerator(self.config)
 
-    def set_progress_callback(self, callback) -> None:
+    def set_progress_callback(self, callback: callable) -> None:
         """
         Set callback function for progress updates.
         
@@ -70,7 +71,7 @@ class IVBatchAnalyzer:
             # 1. Load Data
             self._update_progress(10, "Loading data files...")
             self.loader.stop_requested = self.stop_requested
-            raw_df, batch_map_df, user_initials = self.loader.load_data(self.root_dir)
+            raw_df, batch_map_df, user_initials, iv_curves = self.loader.load_data(self.root_dir)
 
             if self.stop_requested:
                 logger.info("Analysis cancelled by user.")
@@ -100,13 +101,71 @@ class IVBatchAnalyzer:
             stats_df, champion_df, top_cells_df, yield_df, comparisons = \
                 self.stats.compute_statistics(clean_df, batch_order)
 
+            # 3.5 Advanced Analysis (Physics & Hysteresis)
+            hysteresis_df: Optional[pd.DataFrame] = None
+            if self.config.enable_advanced_analysis:
+                self._update_progress(50, "Running advanced physics analysis...")
+                logger.info("Starting advanced physics analysis...")
+                
+                # 1. Hysteresis Analysis
+                hysteresis_df = self.stats.calculate_hysteresis_metrics(raw_df)
+                
+                # 2. Physics Modeling (if curves available)
+                if iv_curves:
+                    logger.info(f"Fitting models for {len(iv_curves)} curves...")
+                    # We need to update clean_df with fitted parameters
+                    # Iterate over clean_df to find matching curves
+                    
+                    # Create columns for new parameters
+                    new_cols = ['Rs_slope', 'Rsh_slope', 'Rs_fitted', 'Rsh_fitted', 
+                               'n', 'I0', 'IL', 'fit_R2', 'has_s_shape', 'has_kink', 
+                               'severity', 'extraction_method', 'fit_successful']
+                    
+                    for col in new_cols:
+                        if col not in clean_df.columns:
+                            clean_df[col] = None
+                            
+                    count = 0
+                    total = len(clean_df)
+                    
+                    for idx, row in clean_df.iterrows():
+                        if self.stop_requested: break
+                        
+                        cell_name = row['CellName']
+                        if cell_name in iv_curves:
+                            curve = iv_curves[cell_name]
+                            V, I = curve['V'], curve['I']
+                            
+                            # Perform extraction
+                            try:
+                                params = physics.extract_pv_parameters(
+                                    V, I, ff=row['FF'], 
+                                    ff_threshold=self.config.ff_threshold_for_fitting
+                                )
+                                
+                                # Update row
+                                for key, val in params.items():
+                                    if key in clean_df.columns:
+                                        clean_df.at[idx, key] = val
+                                        
+                                count += 1
+                            except Exception as e:
+                                logger.debug(f"Physics extraction failed for {cell_name}: {e}")
+                    
+                    logger.info(f"Physics analysis complete for {count}/{total} cells")
+                else:
+                    logger.info("No raw IV curves available for physics modeling")
+
             # 4. Visualize
             if self.stop_requested:
                 return None
             
             self._update_progress(60, "Generating plots...")
-            visualizer = IVVisualizer(self.config, output_dir, theme=self.theme)
-            img_paths = visualizer.visualize(clean_df, stats_df, champion_df, batch_order, group_colors)
+            visualizer = IVVisualizer(self.config, output_dir)
+            img_paths = visualizer.visualize(
+                clean_df, stats_df, champion_df, batch_order, group_colors,
+                hysteresis_df=hysteresis_df
+            )
 
             # 5. Generate Reports
             if self.stop_requested:
@@ -117,7 +176,8 @@ class IVBatchAnalyzer:
             data_folder_name = self.root_dir.name
             self.reporter.export_reports(
                 clean_df, stats_df, champion_df, top_cells_df, yield_df,
-                batch_map_df, comparisons, img_paths, user_initials, data_folder_name
+                batch_map_df, comparisons, img_paths, user_initials, data_folder_name,
+                hysteresis_df=hysteresis_df
             )
 
             self._update_progress(100, "Analysis complete!")

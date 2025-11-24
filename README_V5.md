@@ -27,6 +27,19 @@
 - Advanced visualizations (8 plot types)
 - Batch processing with natural sorting
 
+### 🔬 Advanced Analysis Features (Optional)
+- **Single-Diode Model Fitting**: Two-step approach for Rs/Rsh extraction
+  - Slope-based method (robust, always available)
+  - Lambert W fitting (high accuracy, quality-gated)
+- **Hysteresis Analysis**: Critical for perovskite solar cells
+  - Hysteresis Index calculation
+  - Forward/Reverse scan comparison
+- **S-Shape Detection**: Automatic anomaly identification in IV curves
+
+> **⚠️ Important Note on Physics Modeling**
+>
+> This tool uses Single Diode Model approximation for parameter extraction, optimized for batch trend analysis. For precise physics modeling of tandem devices (e.g., sub-cell recombination breakdown), specialized simulation software is recommended.
+
 ## 📋 Requirements
 
 ```bash

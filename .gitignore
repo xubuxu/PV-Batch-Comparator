@@ -2,52 +2,24 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-*.egg-info/
-dist/
-build/
-*.egg
 
 # Virtual Environment
 .venv/
 venv/
-ENV/
 env/
 
-# IDE
-.vscode/
+# IDEs
 .idea/
+.vscode/
 *.swp
-*.swo
-*~
 
-# User Config (contains local paths)
-config.json
-
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Output/Results (generated data)
-IV_Report_*/
-*.png
-*.xlsx
-*.docx
-*.pptx
-
-# Logs
+# Project Specific
 *.log
+config.json
+.iv_analyzer/
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Environment variables
-.env
-.env.local
-
-# Temporary files
-*.tmp
-*.bak
-~$*
+# Output Data (Keep directories but ignore content if needed, or ignore specific output folders)
+# Assuming output folders are generated dynamically, we might want to ignore them if they are inside the project root
+IV_Report_*/
+Report_*/
+Analysis_*/

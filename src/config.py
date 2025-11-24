@@ -30,7 +30,9 @@ COLUMN_MAPPING = {
     'Rs': ['rs', 'rs_light', 'series_resistance'],
     'Rsh': ['rsh', 'rsh_light', 'shunt_resistance', 'rp'],
     'ScanDir': ['scandirection', 'direction', 'scan_dir'],
-    'CellName': ['cellname', 'device_id', 'sample_name', 'name', 'pixel']
+    'CellName': ['cellname', 'device_id', 'sample_name', 'name', 'pixel'],
+    'Voltage': ['voltage', 'v', 'bias'],  # For raw IV curves
+    'Current': ['current', 'i', 'current_density', 'j']   # For raw IV curves
 }
 
 ANALYSIS_PARAMS = ['Eff', 'Voc', 'Jsc', 'FF', 'Rs', 'Rsh']
@@ -56,6 +58,76 @@ class PlottingConfig:
 
 
 @dataclass(frozen=True)
+class ThemeConfig:
+    """Configuration for a plotting theme."""
+    name: str
+    style: str
+    context: str
+    palette: Any
+    font_family: Tuple[str, ...]
+    background_color: str
+    text_color: str
+    grid_color: str
+    line_width: float = 2.0
+    dpi: int = 300
+    show_points: bool = True
+
+
+# Define Themes
+THEMES = {
+    "Academic": ThemeConfig(
+        name="Academic",
+        style="ticks",
+        context="paper",
+        palette="deep",
+        font_family=("Times New Roman", "serif"),
+        background_color="white",
+        text_color="black",
+        grid_color="#e0e0e0",
+        line_width=1.5,
+        dpi=300
+    ),
+    "Dark": ThemeConfig(
+        name="Dark",
+        style="dark",
+        context="talk",
+        palette="bright",
+        font_family=("Arial", "sans-serif"),
+        background_color="#2b2b2b",
+        text_color="#e0e0e0",
+        grid_color="#555555",
+        line_width=2.0,
+        dpi=150
+    ),
+    "Presentation": ThemeConfig(
+        name="Presentation",
+        style="whitegrid",
+        context="poster",
+        palette="bold",
+        font_family=("Arial", "sans-serif"),
+        background_color="white",
+        text_color="black",
+        grid_color="#cccccc",
+        line_width=3.0,
+        dpi=200
+    )
+}
+
+
+    )
+}
+
+
+# Naming Patterns
+NAMING_PATTERNS = {
+    "Traceable": "IV_Report_{User}_{Timestamp}",
+    "Chronological": "{YYYYMMDD}_{HHMM}_IV_Analysis",
+    "Content-Centric": "Report_{Batch_Summary}_{RunID}",
+    "Minimalist": "Analysis_{Timestamp_Short}"
+}
+
+
+@dataclass(frozen=True)
 class AnalyzerConfig:
     """Immutable configuration for analysis logic."""
     default_initials: str = "USER"
@@ -68,6 +140,22 @@ class AnalyzerConfig:
     scan_direction: str = "Reverse"
     remove_duplicates: bool = True
     outlier_removal: bool = True
+    outlier_removal: bool = True
+    plot_theme: str = "Dark"
+    naming_convention: str = "Traceable"
+    enable_advanced_analysis: bool = False
+    ff_threshold_for_fitting: float = 40.0
+    
+    # Granular Control
+    champion_criteria: str = "Max Eff"  # "Max Eff" or "Max FF"
+    resistance_method: str = "Slope"    # "Slope" or "Fitting"
+    output_formats: Tuple[str, ...] = ("png",)  # "png", "svg", "pdf"
+    report_types: Tuple[str, ...] = ("excel", "word", "pptx")
+    selected_plots: Tuple[str, ...] = (
+        "box", "hist", "trend", "yield", "jv_curve", "voc_jsc", 
+        "combo_drivers", "resistance", "model_fitting", "hysteresis", "anomalies"
+    )
+    
     thresholds: Dict[str, float] = field(default_factory=lambda: {
         "Eff_Min": 0.1, "Voc_Min": 0.1, "Jsc_Min": 0.1, "FF_Min": 10.0, "FF_Max": 90.0
     })
@@ -114,6 +202,10 @@ class ConfigManager:
             },
             "remove_duplicates": True,
             "outlier_removal": True,
+            "plot_theme": "Dark",
+            "naming_convention": "Traceable",
+            "enable_advanced_analysis": False,
+            "ff_threshold_for_fitting": 40.0,
             "theme": "dark",
             "window_geometry": "900x700"
         }
@@ -167,6 +259,20 @@ class ConfigManager:
             scan_direction=user_config.get("scan_direction", "Reverse"),
             remove_duplicates=user_config.get("remove_duplicates", True),
             outlier_removal=user_config.get("outlier_removal", True),
+            remove_duplicates=user_config.get("remove_duplicates", True),
+            outlier_removal=user_config.get("outlier_removal", True),
+            plot_theme=user_config.get("plot_theme", "Dark"),
+            naming_convention=user_config.get("naming_convention", "Traceable"),
+            enable_advanced_analysis=user_config.get("enable_advanced_analysis", False),
+            ff_threshold_for_fitting=user_config.get("ff_threshold_for_fitting", 40.0),
+            champion_criteria=user_config.get("champion_criteria", "Max Eff"),
+            resistance_method=user_config.get("resistance_method", "Slope"),
+            output_formats=tuple(user_config.get("output_formats", ["png"])),
+            report_types=tuple(user_config.get("report_types", ["excel", "word", "pptx"])),
+            selected_plots=tuple(user_config.get("selected_plots", [
+                "box", "hist", "trend", "yield", "jv_curve", "voc_jsc", 
+                "combo_drivers", "resistance", "model_fitting", "hysteresis", "anomalies"
+            ])),
             thresholds=user_config.get("thresholds", {
                 "Eff_Min": 0.1, "Voc_Min": 0.1, "Jsc_Min": 0.1,
                 "FF_Min": 10.0, "FF_Max": 90.0
