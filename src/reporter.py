@@ -197,7 +197,10 @@ class IVReportGenerator:
         # 3. PowerPoint Export
         if 'pptx' in report_types:
             try:
-                self._export_powerpoint(img_paths, data_folder_name, stats_df, champion_df)
+                self._export_powerpoint(stats_df, champion_df, top_cells_df, 
+                                      yield_df, batch_map_df, comparisons, 
+                                      img_paths, user_initials, data_folder_name,
+                                      clean_df, hysteresis_df)
             except Exception as e:
                 logger.error(f"PowerPoint export failed: {e}", exc_info=True)
 
@@ -275,24 +278,14 @@ class IVReportGenerator:
                 doc.add_picture(str(img_paths[key]), width=Inches(6.5))
         
         doc.save(self.output_dir / self.config.report_docx_name)
-
-        # --- Generate PowerPoint Report ---
-        if HAS_PPTX:
-            try:
-                self._export_powerpoint(
-                    stats_df, champion_df, top_cells_df, yield_df,
-                    batch_map_df, comparisons, img_paths, user_initials, 
-                    data_folder_name=data_folder_name
-                )
-            except Exception as e:
-                logger.error(f"Failed to generate PowerPoint: {e}")
-        else:
-            logger.warning("python-pptx not installed, skipping slides.")
+        logger.info(f"✓ Word exported: {self.output_dir / self.config.report_docx_name}")
 
     def _export_powerpoint(self, stats_df: pd.DataFrame, champion_df: pd.DataFrame,
                           top_cells_df: pd.DataFrame, yield_df: pd.DataFrame,
                           batch_map_df: pd.DataFrame, comparisons: Dict[str, Any],
-                          img_paths: Dict[str, Path], user_initials: str, data_folder_name: str = "") -> None:
+                          img_paths: Dict[str, Path], user_initials: str, data_folder_name: str = "",
+                          clean_df: Optional[pd.DataFrame] = None,
+                          hysteresis_df: Optional[pd.DataFrame] = None) -> None:
         """Export report to PowerPoint presentation."""
         prs = Presentation()
         prs.slide_width = PptInches(13.33)
@@ -339,7 +332,7 @@ class IVReportGenerator:
         self._add_pptx_table(prs, yield_df, valid_yield_cols, "Efficiency Yield Distribution (%)")
 
         # --- Advanced Analysis Tables (PPT) ---
-        if self.config.enable_advanced_analysis:
+        if self.config.enable_advanced_analysis and clean_df is not None:
             if 'Rs_fitted' in clean_df.columns:
                 phy_means = clean_df.groupby('Batch')[['Rs_fitted', 'Rsh_fitted', 'n', 'I0', 'IL', 'fit_R2']].mean().reset_index()
                 self._add_pptx_table(prs, phy_means, ['Batch', 'Rs_fitted', 'Rsh_fitted', 'n', 'I0', 'IL'], "Physics Model Parameters (Mean)")
@@ -375,6 +368,7 @@ class IVReportGenerator:
                                         height=PptInches(5.8))
 
         prs.save(self.output_dir / self.config.report_pptx_name)
+        logger.info(f"✓ PowerPoint exported: {self.output_dir / self.config.report_pptx_name}")
 
     # --- TABLE GENERATION METHODS ---
 
