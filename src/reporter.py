@@ -123,6 +123,108 @@ class IVReportGenerator:
         folder_name = re.sub(r'[<>:"/\\|?*]', '_', folder_name)
         
         self.output_dir = root_dir / folder_name
+        self.output_dir = root_dir / folder_name
+        
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created output directory: {self.output_dir}")
+            return self.output_dir
+        except Exception as e:
+            logger.error(f"Failed to create output directory: {e}")
+            # Fallback
+            fallback = root_dir / f"Analysis_{int(now.timestamp())}"
+            fallback.mkdir(exist_ok=True)
+            return fallback
+
+    def export_reports(self, clean_df: pd.DataFrame, stats_df: pd.DataFrame,
+                      champion_df: pd.DataFrame, top_cells_df: pd.DataFrame,
+                      yield_df: pd.DataFrame, batch_map_df: pd.DataFrame,
+                      comparisons: Dict[str, Any], img_paths: Dict[str, Path],
+                      user_initials: str, data_folder_name: str,
+                      hysteresis_df: Optional[pd.DataFrame] = None) -> None:
+        """
+        Export Excel, Word, and PowerPoint reports.
+        
+        Args:
+            clean_df: Cleaned dataframe
+            stats_df: Statistics dataframe
+            champion_df: Champion cells dataframe
+            top_cells_df: Top 10 cells dataframe
+            yield_df: Yield distribution dataframe
+            batch_map_df: Batch mapping dataframe
+            comparisons: Statistical comparison results
+            img_paths: Dictionary of plot paths
+            user_initials: User initials
+            data_folder_name: Name of data folder
+            hysteresis_df: Optional hysteresis dataframe
+        """
+        if not self.output_dir:
+            logger.error("Output directory not set.")
+            return
+
+        logger.info("Exporting reports...")
+
+        # Check report types
+        report_types = getattr(self.config, 'report_types', ('excel', 'word', 'pptx'))
+
+        # 1. Excel Export
+        if 'excel' in report_types:
+            try:
+                excel_path = self.output_dir / self.config.excel_data_name
+                with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+                    clean_df.to_excel(writer, sheet_name='Cleaned Data', index=False)
+                    stats_df.to_excel(writer, sheet_name='Statistics', index=False)
+                    champion_df.to_excel(writer, sheet_name='Champions', index=False)
+                    top_cells_df.to_excel(writer, sheet_name='Top 10', index=False)
+                    yield_df.to_excel(writer, sheet_name='Yield', index=False)
+                    batch_map_df.to_excel(writer, sheet_name='Batch Map', index=False)
+                    
+                    if hysteresis_df is not None and not hysteresis_df.empty:
+                        hysteresis_df.to_excel(writer, sheet_name='Hysteresis', index=False)
+                
+                logger.info(f"✓ Excel exported: {excel_path}")
+            except Exception as e:
+                logger.error(f"Excel export failed: {e}")
+
+        # 2. Word Export
+        if 'word' in report_types:
+            try:
+                self._export_word(clean_df, stats_df, champion_df, top_cells_df,
+                                yield_df, batch_map_df, img_paths, hysteresis_df)
+            except Exception as e:
+                logger.error(f"Word export failed: {e}", exc_info=True)
+
+        # 3. PowerPoint Export
+        if 'pptx' in report_types:
+            try:
+                self._export_powerpoint(img_paths, data_folder_name, stats_df, champion_df)
+            except Exception as e:
+                logger.error(f"PowerPoint export failed: {e}", exc_info=True)
+
+    def _export_word(self, clean_df: pd.DataFrame, stats_df: pd.DataFrame,
+                    champion_df: pd.DataFrame, top_cells_df: pd.DataFrame,
+                    yield_df: pd.DataFrame, batch_map_df: pd.DataFrame,
+                    img_paths: Dict[str, Path],
+                    hysteresis_df: Optional[pd.DataFrame] = None) -> None:
+        """Generate Word report."""
+        doc = Document()
+        
+        # Title
+        title = doc.add_heading('IV Batch Analysis Report', level=0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add timestamp
+        doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        doc.add_page_break()
+
+        # Section 1: Summary
+        doc.add_heading('1. Executive Summary', level=1)
+        doc.add_paragraph(f"Total batches analyzed: {len(stats_df)}")
+        doc.add_paragraph(f"Total cells: {len(clean_df)}")
+        
+        # Section 2: Tables
+        doc.add_heading('2. Statistical Tables', level=1)
+        
         self._add_word_table(doc, batch_map_df, ['Batch', 'Folder'], "2.1 Batch & Folder Reference")
 
         cols = ['Batch', 'Count', 'Eff_Mean', 'Eff_Max', 'Voc_Mean', 'FF_Mean']
@@ -137,24 +239,19 @@ class IVReportGenerator:
         valid_yield_cols = ['Batch'] + [c for c in yield_cols if yield_df[c].sum() > 0]
         self._add_word_table(doc, yield_df, valid_yield_cols, "2.5 Efficiency Yield Distribution (%)")
 
-        # --- Advanced Analysis Tables ---
+        # Advanced Analysis Tables
         if self.config.enable_advanced_analysis:
-            # 1. Physics Parameters
             if 'Rs_fitted' in clean_df.columns:
                 phy_cols = ['Batch', 'Rs_fitted', 'Rsh_fitted', 'n', 'I0', 'IL', 'fit_R2']
-                # Calculate means per batch
                 phy_means = clean_df.groupby('Batch')[['Rs_fitted', 'Rsh_fitted', 'n', 'I0', 'IL', 'fit_R2']].mean().reset_index()
                 self._add_word_table(doc, phy_means, phy_cols, "2.6 Physics Model Parameters (Mean)")
 
-            # 2. Hysteresis
             if hysteresis_df is not None and not hysteresis_df.empty and 'HI_Eff' in hysteresis_df.columns:
                 hys_cols = ['Batch', 'HI_Eff', 'HI_Voc', 'HI_Jsc', 'HI_FF']
                 hys_means = hysteresis_df.groupby('Batch')[['HI_Eff', 'HI_Voc', 'HI_Jsc', 'HI_FF']].mean().reset_index()
                 self._add_word_table(doc, hys_means, hys_cols, "2.7 Hysteresis Indices (Mean %)")
 
-            # 3. Anomalies
             if 'has_s_shape' in clean_df.columns:
-                # Count True values
                 anom_counts = clean_df.groupby('Batch')[['has_s_shape', 'has_kink']].sum().reset_index()
                 self._add_word_table(doc, anom_counts, ['Batch', 'has_s_shape', 'has_kink'], "2.8 Anomaly Detection Summary (Count)")
 
