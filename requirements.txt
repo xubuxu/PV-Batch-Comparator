@@ -1,0 +1,30 @@
+# IV Batch Analyzer V5.0 - Professional Edition
+# Core Dependencies
+
+# Data Processing
+pandas>=1.5.0
+numpy>=1.23.0
+openpyxl>=3.0.0
+
+# Visualization
+matplotlib>=3.6.0
+seaborn>=0.12.0
+
+# Scientific Computing
+scipy>=1.9.0
+
+# Report Generation
+python-docx>=0.8.11
+python-pptx>=0.6.21
+
+# Modern GUI
+customtkinter>=5.0.0
+darkdetect>=0.8.0
+
+# Standard Library (included with Python)
+# - tkinter
+# - threading
+# - queue
+# - logging
+# - pathlib
+# - dataclasses
